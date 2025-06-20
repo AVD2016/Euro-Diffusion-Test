@@ -1,0 +1,222 @@
+import os
+import ast
+from collections import defaultdict
+import sys
+
+class ClassInfo:
+    def __init__(self, name, bases, file_path):
+        self.name = name
+        self.bases = bases
+        self.file_path = file_path
+        self.methods = set()
+        self.attributes = set()
+        self.children = set()
+        self.dit = 0
+        self.noc = 0
+        self.defined_methods = set()
+        self.defined_attributes = set()
+        self.inherited_methods_non_overridden = set()
+        self.inherited_attributes_non_overridden = set()
+        self.overridden_methods = set()
+        self.new_methods = set()
+
+    def __repr__(self):
+        return f"ClassInfo(name='{self.name}', bases={self.bases}, DIT={self.dit}, NOC={self.noc})"
+
+class CodeAnalyzer(ast.NodeVisitor):
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.classes = {}
+        self.current_class_name = None
+
+    def visit_ClassDef(self, node):
+        base_names = [b.id for b in node.bases if isinstance(b, ast.Name)]
+        class_info = ClassInfo(node.name, base_names, self.file_path)
+        self.classes[node.name] = class_info
+        old_class_name = self.current_class_name
+        self.current_class_name = node.name
+
+        for child_node in node.body:
+            if isinstance(child_node, ast.Assign):
+                for target in child_node.targets:
+                    if isinstance(target, ast.Name):
+                        is_private = target.id.startswith('_')
+                        class_info.defined_attributes.add((target.id, is_private))
+                        class_info.attributes.add((target.id, is_private))
+
+        self.generic_visit(node)
+        self.current_class_name = old_class_name
+
+    def visit_FunctionDef(self, node):
+        if self.current_class_name:
+            class_info = self.classes[self.current_class_name]
+            is_private = node.name.startswith('_')
+            class_info.methods.add((node.name, is_private))
+            class_info.defined_methods.add((node.name, is_private))
+
+            if node.name == '__init__':
+                for sub_node in ast.walk(node):
+                    if isinstance(sub_node, ast.Attribute) and isinstance(sub_node.value, ast.Name) and sub_node.value.id == 'self':
+                        attr_name = sub_node.attr
+                        is_attr_private = attr_name.startswith('_')
+                        class_info.defined_attributes.add((attr_name, is_attr_private))
+                        class_info.attributes.add((attr_name, is_attr_private))
+        self.generic_visit(node)
+
+def analyze_directory(directory_path):
+    all_classes = {}
+    for root, _, files in os.walk(directory_path):
+        for file in files:
+            if file.endswith(".py"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                        tree = ast.parse(content, filename=file_path)
+                        analyzer = CodeAnalyzer(file_path)
+                        analyzer.visit(tree)
+                        for cls_name, cls_info in analyzer.classes.items():
+                            if cls_name in all_classes:
+                                print(f"Warning: Duplicate class name {cls_name} found. Using first occurrence.")
+                            else:
+                                all_classes[cls_name] = cls_info
+                except SyntaxError as e:
+                    print(f"Syntax error in {file_path}: {e}")
+                except Exception as e:
+                    print(f"Could not parse {file_path}: {e}")
+    return all_classes
+
+def build_hierarchy_and_noc(all_classes):
+    for name, class_info in all_classes.items():
+        for base_name in class_info.bases:
+            if base_name in all_classes:
+                all_classes[base_name].children.add(name)
+    for name, class_info in all_classes.items():
+        class_info.noc = len(class_info.children)
+
+def calculate_dit_recursive(class_name, all_classes, visited_for_dit):
+    if class_name not in all_classes:
+        return 0
+    if class_name in visited_for_dit and all_classes[class_name].dit > 0:
+        return all_classes[class_name].dit
+    visited_for_dit.add(class_name)
+    class_info = all_classes[class_name]
+    if not class_info.bases:
+        class_info.dit = 0
+        return 0
+    max_depth = 0
+    for base_name in class_info.bases:
+        depth = 0
+        if base_name in all_classes and base_name not in visited_for_dit:
+            depth = calculate_dit_recursive(base_name, all_classes, visited_for_dit.copy())
+        if depth > max_depth:
+            max_depth = depth
+    class_info.dit = max_depth + 1
+    return class_info.dit
+
+def calculate_all_dits(all_classes):
+    for name in all_classes:
+        if all_classes[name].dit == 0:
+            calculate_dit_recursive(name, all_classes, set())
+
+def get_methods_from_class_and_parents(class_name, all_classes, visited=None):
+    if visited is None:
+        visited = set()
+    if class_name in visited or class_name not in all_classes:
+        return set()
+    visited.add(class_name)
+    class_info = all_classes[class_name]
+    current = {m for m, _ in class_info.defined_methods}
+    parents = set()
+    for base in class_info.bases:
+        parents |= get_methods_from_class_and_parents(base, all_classes, visited.copy())
+    return current | parents
+
+def get_attributes_from_class_and_parents(class_name, all_classes, visited=None):
+    if visited is None:
+        visited = set()
+    if class_name in visited or class_name not in all_classes:
+        return set()
+    visited.add(class_name)
+    class_info = all_classes[class_name]
+    current = {a for a, _ in class_info.defined_attributes}
+    parents = set()
+    for base in class_info.bases:
+        parents |= get_attributes_from_class_and_parents(base, all_classes, visited.copy())
+    return current | parents
+
+def calculate_mood_metrics(all_classes):
+    total = len(all_classes)
+    if total == 0:
+        return {m: 0 for m in ("MHF", "AHF", "MIF", "AIF", "POF", "COF")}
+
+    sums = defaultdict(int)
+    for cls_info in all_classes.values():
+        # Hidden vs defined
+        for name, priv in cls_info.defined_methods:
+            sums["total_methods"] += 1
+            if priv: sums["hidden_methods"] += 1
+        for name, priv in cls_info.defined_attributes:
+            sums["total_attrs"] += 1
+            if priv: sums["hidden_attrs"] += 1
+        # Inherited non-overridden
+        parents = set()
+        parent_attrs = set()
+        for base in cls_info.bases:
+            parents |= get_methods_from_class_and_parents(base, all_classes)
+            parent_attrs |= get_attributes_from_class_and_parents(base, all_classes)
+
+        defined_m = {n for n, _ in cls_info.defined_methods}
+        defined_a = {n for n, _ in cls_info.defined_attributes}
+
+        inh_non_ov_m = parents - defined_m
+        inh_non_ov_a = parent_attrs - defined_a
+
+        sums["inherited_non_overridden_methods"] += len(inh_non_ov_m)
+        sums["all_available_methods"] += len(defined_m | parents)
+        sums["inherited_non_overridden_attrs"] += len(inh_non_ov_a)
+        sums["all_defined_attrs"] += len(defined_a)
+
+        # POF
+        overr = defined_m & parents
+        new_m = defined_m - parents
+        sums["overridden_methods"] += len(overr)
+        sums["new_methods_times_noc"] += len(new_m) * cls_info.noc
+
+    # MOOD metrics
+    mhf = sums["hidden_methods"] / sums["total_methods"] if sums["total_methods"] else 0
+    ahf = sums["hidden_attrs"] / sums["total_attrs"] if sums["total_attrs"] else 0
+    mif = sums["inherited_non_overridden_methods"] / sums["all_available_methods"] if sums["all_available_methods"] else 0
+    aif = sums["inherited_non_overridden_attrs"] / sums["all_defined_attrs"] if sums["all_defined_attrs"] else 0
+    pof = sums["overridden_methods"] / sums["new_methods_times_noc"] if sums["new_methods_times_noc"] else 0
+    cof = 0  # поки не рахуємо COF
+
+    return {"MHF": mhf, "AHF": ahf, "MIF": mif, "AIF": aif, "POF": pof, "COF": cof}
+
+if __name__ == "__main__":
+    django_path = input("Enter the path to the Django (or other) Python package: ").strip()
+    if not os.path.isdir(django_path):
+        print(f"Error: Directory '{django_path}' not found.")
+        sys.exit(1)
+
+    print(f"\nAnalyzing library at: {django_path}\n")
+
+    all_classes = analyze_directory(django_path)
+    print(f"Found {len(all_classes)} classes.\n")
+
+    build_hierarchy_and_noc(all_classes)
+    calculate_all_dits(all_classes)
+
+    print("Sample DIT/NOC values (up to 20 classes with non-zero metrics):")
+    shown = 0
+    for cls, info in all_classes.items():
+        if shown < 20 and (info.dit > 0 or info.noc > 0):
+            print(f"  {cls:<40} DIT={info.dit:<3} NOC={info.noc}")
+            shown += 1
+    if shown == 0:
+        print("  No classes with DIT>0 or NOC>0 found.\n")
+
+    print("MOOD Metrics for the library:")
+    mood = calculate_mood_metrics(all_classes)
+    for key, val in mood.items():
+        print(f"  {key}: {val:.4f}")
