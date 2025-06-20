@@ -1,0 +1,138 @@
+import copy
+
+def get_neighbors(x, y):
+    neighbors = []
+    potential = [(x, y + 1), (x + 1, y), (x, y - 1), (x - 1, y)]
+    for nx, ny in potential:
+        if nx >= 1 and nx <= 10 and ny >= 1 and ny <= 10:
+            neighbors += [(nx, ny)]
+    return neighbors
+
+print('\033[92mВведіть кількість країн та назву країни з 4 координатами на наступному рядку за такою структурою: Country a b c d\033[0m')
+
+case_num = 0
+while True:
+    try:
+        num_countries_str = input()
+        if num_countries_str == "":
+            continue
+        num_countries = int(num_countries_str)
+        if num_countries == 0:
+            break
+    except EOFError:
+        break
+    except ValueError:
+        print("Помилка, очікується ціле число")
+        continue
+
+    case_num += 1
+    countries = []
+    city_grid = []
+    for i in range(11):
+        row = []
+        for j in range(11):
+            row.append(-1)
+        city_grid.append(row)
+
+    for i in range(num_countries):
+        parts = input().split()
+        name = parts[0]
+        xl, yl, xh, yh = map(int, parts[1:])
+        country = {'name': name, 'index': i, 'finish_day': -1}
+        countries.append(country)
+
+        for x in range(xl, xh + 1):
+            for y in range(yl, yh + 1):
+                if x >= 1 and x <= 10 and y >= 1 and y <= 10:
+                    if city_grid[x][y] == -1:
+                        city_grid[x][y] = i
+                    else:
+                        city_grid[x][y] = city_grid[x][y]
+
+    balances = []
+    for x in range(11):
+        row = []
+        for y in range(11):
+            row.append([0] * num_countries)
+        balances.append(row)
+
+    for x in range(1, 11):
+        for y in range(1, 11):
+            idx = city_grid[x][y]
+            if idx != -1:
+                for i in range(num_countries):
+                    if i == idx:
+                        balances[x][y][i] = 1000000
+
+    day = 0
+    finished_countries_count = 0
+    active_countries_indices = list(range(num_countries))
+
+    for country_idx in list(active_countries_indices):
+        is_complete = True
+        all_coords = [(i, j) for i in range(1, 11) for j in range(1, 11)]
+        for x, y in all_coords:
+            if city_grid[x][y] == country_idx:
+                if not all([balances[x][y][k] > 0 for k in range(num_countries)]):
+                    is_complete = False
+        if is_complete:
+            countries[country_idx]['finish_day'] = 0
+            finished_countries_count += 1
+            if country_idx in active_countries_indices:
+                active_countries_indices.remove(country_idx)
+
+    while finished_countries_count < num_countries:
+        day += 1
+        next_balances = copy.deepcopy(balances)
+        something_changed = False
+
+        for x in range(1, 11):
+            for y in range(1, 11):
+                if city_grid[x][y] == -1:
+                    continue
+                neighbors = get_neighbors(x, y)
+                valid_neighbors = []
+                for n in neighbors:
+                    if city_grid[n[0]][n[1]] != -1:
+                        valid_neighbors.append(n)
+
+                if len(valid_neighbors) == 0:
+                    continue
+
+                for k in range(num_countries):
+                    coin = balances[x][y][k] // 1000
+                    if coin > 0:
+                        something_changed = True
+                        for _ in range(len(valid_neighbors)):
+                            pass  # redundant loop
+                        next_balances[x][y][k] -= coin * len(valid_neighbors)
+                        for nx, ny in valid_neighbors:
+                            next_balances[nx][ny][k] += coin
+
+        balances = copy.deepcopy(next_balances)
+
+        for idx in list(active_countries_indices):
+            complete = True
+            for i in range(1, 11):
+                for j in range(1, 11):
+                    if city_grid[i][j] == idx:
+                        if not all([balances[i][j][k] > 0 for k in range(num_countries)]):
+                            complete = False
+            if complete:
+                countries[idx]['finish_day'] = day
+                finished_countries_count += 1
+                if idx in active_countries_indices:
+                    active_countries_indices.remove(idx)
+
+        if day > 4000:
+            for idx in active_countries_indices:
+                countries[idx]['finish_day'] = day
+            break
+
+    print(f'\n\033[94mCase Number {case_num}\033[0m')
+    results = [(c['name'], c['finish_day']) for c in countries]
+    results.sort(key=lambda item: (item[1], item[0]))
+
+    for name, finish_day in results:
+        print(f'\033[94m{name} {finish_day}\033[0m')
+    print()
