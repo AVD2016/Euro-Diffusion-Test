@@ -1,0 +1,144 @@
+import os
+
+def is_probably_in_string(segment, index):
+    single = segment[:index].count("'")
+    double = segment[:index].count('"')
+    return (single % 2 == 1) or (double % 2 == 1)
+
+def analyze_file(file_path):
+    total_lines = 0
+    blank_lines = 0
+    any_comment_lines = 0
+    comment_metric_lines = 0
+    logic_lines = 0
+
+    inside_doc = False
+    doc_delim = None
+
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for raw_line in f:
+                total_lines += 1
+                line = raw_line.strip()
+
+                if not line:
+                    blank_lines += 1
+                    if inside_doc:
+                        comment_metric_lines += 1
+                    continue
+
+                if inside_doc:
+                    comment_metric_lines += 1
+                    if doc_delim in line:
+                        if line.count(doc_delim) % 2 == 0 or line.endswith(doc_delim):
+                            inside_doc = False
+                            doc_delim = None
+                    continue
+
+                if line.startswith('"""') or line.startswith("'''"):
+                    any_comment_lines += 1
+                    comment_metric_lines += 1
+                    doc_delim = '"""' if line.startswith('"""') else "'''"
+                    if not (line.endswith(doc_delim) and len(line) >= 6):
+                        inside_doc = True
+                    continue
+
+                hash_index = -1
+                in_single = False
+                in_double = False
+                for idx, ch in enumerate(line):
+                    if ch == "'":
+                        in_single = not in_single
+                    elif ch == '"':
+                        in_double = not in_double
+                    elif ch == '#' and not in_single and not in_double:
+                        hash_index = idx
+                        break
+
+                if hash_index != -1:
+                    any_comment_lines += 1
+                    if line.startswith('#'):
+                        comment_metric_lines += 1
+                        continue
+                    else:
+                        line = line[:hash_index].strip()
+
+                if line:
+                    for piece in line.split(';'):
+                        if piece.strip():
+                            logic_lines += 1
+
+    except Exception as e:
+        print(f"[!] Failed to process {file_path}: {e}")
+        return 0, 0, 0, 0, 0
+
+    return total_lines, blank_lines, any_comment_lines, comment_metric_lines, logic_lines
+
+def analyze_directory(path):
+    count_total = 0
+    count_blank = 0
+    count_comment = 0
+    count_comment_metric = 0
+    count_logic = 0
+    file_count = 0
+
+    if os.path.isfile(path) and path.endswith(".py"):
+        print(f"Enter the path to the Python project: {path}\n")
+        p, b, c, cm, l = analyze_file(path)
+        count_total += p
+        count_blank += b
+        count_comment += c
+        count_comment_metric += cm
+        count_logic += l
+        file_count = 1
+    elif os.path.isdir(path):
+        print(f"Enter the path to the Python project: {path}\n")
+        for dir_path, _, files in os.walk(path):
+            for f in files:
+                if f.endswith(".py"):
+                    full = os.path.join(dir_path, f)
+                    p, b, c, cm, l = analyze_file(full)
+                    count_total += p
+                    count_blank += b
+                    count_comment += c
+                    count_comment_metric += cm
+                    count_logic += l
+                    file_count += 1
+    else:
+        print("Invalid path!")
+        return
+
+    if file_count == 0:
+        print("No .py files found for analysis.")
+        return
+
+    # Визначаємо обмеження для порожніх рядків (25%)
+    blank_limit = int(count_total * 0.25)
+    reported_blanks = min(count_blank, blank_limit)
+    effective_code = count_total - reported_blanks - count_comment_metric
+
+    f_value = 0
+    if effective_code > 0:
+        f_value = count_comment_metric / effective_code
+    elif count_comment_metric > 0:
+        f_value = 1
+
+    comment_rating = "good (>=0.1)" if f_value >= 0.1 else "poor (<0.1)"
+
+    print("--- Project Analysis Result ---")
+    print(f"Total number of processed .py files: {file_count}")
+    print(f"Total number of physical lines: {count_total}")
+    print(f"Total number of intermediate lines: {reported_blanks}")
+    print(f"Total number of logical lines of code: {count_logic}")
+    print(f"Total number of lines containing comments: {count_comment}")
+    print(f"Total number of comment lines: {count_comment_metric}")
+    print(f"Comment density: {f_value:.3f}")
+    print(f"Coment rating: {comment_rating}")
+    input("Press any key to continue . . .")
+
+if __name__ == "__main__":
+    user_input = input()
+    if os.path.exists(user_input):
+        analyze_directory(user_input)
+    else:
+        print("Path does not exist.")
